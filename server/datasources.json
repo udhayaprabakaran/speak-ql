@@ -1,0 +1,12 @@
+[
+  {
+    "id": "b63baddf",
+    "name": "speakldb",
+    "type": "postgres",
+    "host": "localhost",
+    "port": 5432,
+    "database": "speakql",
+    "user": "speakql",
+    "password": "speakql123"
+  }
+]

@@ -91,8 +91,9 @@ async def _mock_process(prompt: str) -> dict[str, Any]:
 
 async def _llm_process(prompt: str, datasource: str, schema: str) -> dict[str, Any]:
     """Use LangChain + Google Gemini to generate SQL and chart spec."""
+    import asyncio
     from langchain_google_genai import ChatGoogleGenerativeAI
-    from langchain.prompts import ChatPromptTemplate
+    from langchain_core.prompts import ChatPromptTemplate
 
     system_template = """You are SpeakQL, an expert data analyst AI.
 Given a database schema and a user's natural-language question, you must return:
@@ -121,24 +122,67 @@ Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
     ])
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
+        model="gemini-3-flash-preview",
         temperature=0,
         google_api_key=os.getenv("GOOGLE_API_KEY"),
     )
 
     chain = chat_prompt | llm
 
-    response = await chain.ainvoke({
-        "datasource": datasource,
-        "schema": schema,
-        "prompt": prompt,
-    })
+    # Retry with exponential backoff for rate limits
+    max_retries = 3
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            response = await chain.ainvoke({
+                "datasource": datasource,
+                "schema": schema,
+                "prompt": prompt,
+            })
+            break
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                wait = (attempt + 1) * 5  # 5s, 10s, 15s
+                print(f"[Agent] Rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(wait)
+            else:
+                raise
+    else:
+        raise RuntimeError(
+            f"Gemini API rate limit exceeded after {max_retries} retries. "
+            "Please wait a minute and try again, or check your quota at https://ai.dev/rate-limit"
+        ) from last_error
 
     # Parse the JSON from the LLM response
-    content = response.content.strip()
+    raw = response.content
+    # Some Gemini models return content as a list of parts
+    if isinstance(raw, list):
+        # Extract text from each part (may be dicts with 'text' key or strings)
+        parts = []
+        for part in raw:
+            if isinstance(part, dict) and "text" in part:
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+            else:
+                parts.append(str(part))
+        content = " ".join(parts).strip()
+    else:
+        content = raw.strip()
+
+    print(f"[Agent] Raw LLM response: {content[:200]}...")
+
     # Strip markdown code fences if present
     content = re.sub(r"^```(?:json)?\s*", "", content)
     content = re.sub(r"\s*```$", "", content)
+
+    # Try to extract JSON object from response if there's surrounding text
+    json_match = re.search(r"\{.*\}", content, re.DOTALL)
+    if json_match:
+        content = json_match.group(0)
+
     return json.loads(content)
 
 
