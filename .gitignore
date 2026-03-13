@@ -33,3 +33,4 @@ uv.lock
 *.log
 coverage/
 .vercel/
+*.pdf

@@ -187,6 +187,114 @@ Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
 
 
 # ---------------------------------------------------------------------------
+# Summarise actual query results
+# ---------------------------------------------------------------------------
+
+
+async def _llm_summarize(prompt: str, sql: str, data: list[dict]) -> str:
+    """Ask the LLM to summarise the actual data returned by the query."""
+    import asyncio
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.prompts import ChatPromptTemplate
+
+    # Limit data sent to the LLM to avoid token overflow
+    sample = data[:30]
+    data_preview = json.dumps(sample, default=str)
+
+    system_template = """You are SpeakQL, an expert data analyst AI.
+The user asked: "{prompt}"
+The following SQL was executed:
+{sql}
+
+Here are the results (up to 30 rows):
+{data}
+
+Provide a concise summary of the results in 2-4 bullet points.
+Focus on key findings, notable patterns, highest/lowest values, and actionable insights.
+Respond ONLY with plain text bullet points using • as the bullet character, one per line.
+Do NOT include any JSON, markdown, or extra formatting."""
+
+    chat_prompt = ChatPromptTemplate.from_messages([
+        ("system", system_template),
+    ])
+
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-3-flash-preview",
+        temperature=0.2,
+        google_api_key=os.getenv("GOOGLE_API_KEY"),
+    )
+
+    chain = chat_prompt | llm
+
+    max_retries = 2
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            response = await chain.ainvoke({
+                "prompt": prompt,
+                "sql": sql,
+                "data": data_preview,
+            })
+            break
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                wait = (attempt + 1) * 3
+                print(f"[Agent] Summary rate limited, retrying in {wait}s")
+                await asyncio.sleep(wait)
+            else:
+                raise
+    else:
+        # If summarisation fails due to rate limits, return a fallback
+        print(f"[Agent] Summary generation failed after retries: {last_error}")
+        return "• Data returned successfully — see the Data tab for full results"
+
+    raw = response.content
+    if isinstance(raw, list):
+        parts = []
+        for part in raw:
+            if isinstance(part, dict) and "text" in part:
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+            else:
+                parts.append(str(part))
+        return " ".join(parts).strip()
+    return raw.strip()
+
+
+def _mock_summarize(data: list[dict]) -> str:
+    """Generate a simple data-aware summary without an LLM."""
+    if not data:
+        return "• No results were returned for this query"
+
+    columns = list(data[0].keys())
+    row_count = len(data)
+    points = [f"• Query returned {row_count} rows across {len(columns)} columns ({', '.join(columns)})"]
+
+    # Find a numeric column to provide min/max insight
+    for col in columns:
+        values = [row[col] for row in data if isinstance(row.get(col), (int, float))]
+        if values:
+            hi_row = max(data, key=lambda r: r.get(col, 0) if isinstance(r.get(col), (int, float)) else 0)
+            lo_row = min(data, key=lambda r: r.get(col, 0) if isinstance(r.get(col), (int, float)) else float('inf'))
+            # Find a label column (first non-numeric column)
+            label_col = next((c for c in columns if c != col and not isinstance(data[0].get(c), (int, float))), None)
+            if label_col:
+                hi_label = hi_row.get(label_col, "N/A")
+                lo_label = lo_row.get(label_col, "N/A")
+                points.append(f"• Highest {col}: {hi_label} ({max(values):,.0f}), Lowest: {lo_label} ({min(values):,.0f})")
+            else:
+                points.append(f"• {col} ranges from {min(values):,.0f} to {max(values):,.0f}")
+            total = sum(values)
+            points.append(f"• Total {col}: {total:,.0f}, Average: {total / len(values):,.0f}")
+            break
+
+    return "\n".join(points)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -213,3 +321,22 @@ async def process_query(
         resolved_schema = schema or FALLBACK_SCHEMA.get(datasource, FALLBACK_SCHEMA["postgres"])
         return await _llm_process(prompt, datasource, resolved_schema)
     return await _mock_process(prompt)
+
+
+async def summarize_results(
+    prompt: str, sql: str, data: list[dict]
+) -> str:
+    """
+    Summarise the actual query results.
+
+    Uses the LLM when available, otherwise generates a simple
+    data-aware summary from the returned rows.
+    """
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    if api_key and not api_key.startswith("your-"):
+        try:
+            return await _llm_summarize(prompt, sql, data)
+        except Exception as e:
+            print(f"[Agent] LLM summary failed, using mock: {e}")
+            return _mock_summarize(data)
+    return _mock_summarize(data)

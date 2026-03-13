@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from agent.sql_agent import process_query
+from agent.sql_agent import process_query, summarize_results
 from datasources import (
     DatasourceConfig,
     DatasourceCreate,
@@ -83,6 +83,7 @@ class QueryResponse(BaseModel):
     sql: str
     data: list[dict]
     chart: ChartSpec
+    summary: str = Field(default="", description="Brief bullet-point summary of query insights")
 
 
 # ---------------------------------------------------------------------------
@@ -205,10 +206,18 @@ async def query(req: QueryRequest):
             mock_server = PostgresMCPServer()
             data = await mock_server.execute_query(agent_result["sql"])
 
+        # 4. Summarise the actual results
+        summary = await summarize_results(
+            prompt=req.prompt,
+            sql=agent_result["sql"],
+            data=data,
+        )
+
         return QueryResponse(
             sql=agent_result["sql"],
             data=data,
             chart=ChartSpec(**agent_result["chart"]),
+            summary=summary,
         )
     except HTTPException:
         raise

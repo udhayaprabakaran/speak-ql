@@ -14,18 +14,20 @@ interface ResultData {
     sql: string;
     data: Record<string, unknown>[];
     chart: ChartSpec;
+    summary: string;
 }
 
 interface ResultsPanelProps {
     result: ResultData;
 }
 
-type TabId = "chart" | "sql" | "data";
+type TabId = "summary" | "chart" | "sql" | "data";
 
 export default function ResultsPanel({ result }: ResultsPanelProps) {
-    const [activeTab, setActiveTab] = useState<TabId>("chart");
+    const [activeTab, setActiveTab] = useState<TabId>("summary");
 
     const tabs: { id: TabId; label: string; icon: string }[] = [
+        { id: "summary", label: "Summary", icon: "💡" },
         { id: "chart", label: "Chart", icon: "📊" },
         { id: "sql", label: "SQL", icon: "🗂️" },
         { id: "data", label: "Data", icon: "📋" },
@@ -61,6 +63,58 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
                     </button>
                 ))}
             </div>
+
+            {/* Summary tab */}
+            {activeTab === "summary" && (
+                <div className="animate-fade-in-up" id="summary-content">
+                    <div
+                        className="rounded-xl overflow-hidden"
+                        style={{
+                            background: "rgba(0, 0, 0, 0.2)",
+                            border: "1px solid var(--border-glass)",
+                        }}
+                    >
+                        <div
+                            style={{
+                                height: "3px",
+                                background: "var(--gradient-primary)",
+                            }}
+                        />
+                        <div className="p-6">
+                            <p
+                                className="text-xs font-medium uppercase tracking-wider mb-4"
+                                style={{ color: "var(--text-muted)" }}
+                            >
+                                AI Insights
+                            </p>
+                            <ul
+                                className="flex flex-col gap-3"
+                                style={{ listStyle: "none", padding: 0, margin: 0 }}
+                            >
+                                {result.summary
+                                    .split("\n")
+                                    .map((line) => line.replace(/^[\u2022\-\*]\s*/, "").trim())
+                                    .filter(Boolean)
+                                    .map((point, i) => (
+                                        <li
+                                            key={i}
+                                            className="flex items-start gap-3 text-sm leading-relaxed"
+                                            style={{ color: "var(--text-secondary)" }}
+                                        >
+                                            <span
+                                                className="mt-1.5 flex-shrink-0 w-2 h-2 rounded-full"
+                                                style={{
+                                                    background: "var(--gradient-primary)",
+                                                }}
+                                            />
+                                            {point}
+                                        </li>
+                                    ))}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Chart tab */}
             {activeTab === "chart" && (

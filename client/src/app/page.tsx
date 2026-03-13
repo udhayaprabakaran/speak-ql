@@ -16,6 +16,7 @@ interface QueryResult {
     sql: string;
     data: Record<string, unknown>[];
     chart: ChartSpec;
+    summary: string;
 }
 
 interface Datasource {
